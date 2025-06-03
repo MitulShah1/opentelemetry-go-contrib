@@ -1,18 +1,17 @@
 // Copyright The OpenTelemetry Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// Example exemplifies the otelmux package.
-package main
+package otelgin_test
 
 import (
 	"context"
-	"fmt"
+	"html/template"
 	"log"
 	"net/http"
 
-	"github.com/gorilla/mux"
+	"github.com/gin-gonic/gin"
 
-	"go.opentelemetry.io/contrib/instrumentation/github.com/gorilla/mux/otelmux"
+	"go.opentelemetry.io/contrib/instrumentation/github.com/gin-gonic/gin/otelgin"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	stdout "go.opentelemetry.io/otel/exporters/stdout/stdouttrace"
@@ -21,9 +20,9 @@ import (
 	oteltrace "go.opentelemetry.io/otel/trace"
 )
 
-var tracer = otel.Tracer("mux-server")
+var tracer = otel.Tracer("gin-server")
 
-func main() {
+func Example() {
 	tp, err := initTracer()
 	if err != nil {
 		log.Fatal(err)
@@ -33,17 +32,21 @@ func main() {
 			log.Printf("Error shutting down tracer provider: %v", err)
 		}
 	}()
-	r := mux.NewRouter()
-	r.Use(otelmux.Middleware("my-server"))
-	r.HandleFunc("/users/{id:[0-9]+}", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		vars := mux.Vars(r)
-		id := vars["id"]
-		name := getUser(r.Context(), id)
-		reply := fmt.Sprintf("user %s (id %s)\n", name, id)
-		_, _ = w.Write(([]byte)(reply))
-	}))
-	http.Handle("/", r)
-	_ = http.ListenAndServe(":8080", nil) //nolint:gosec // Ignoring G114: Use of net/http serve function that has no support for setting timeouts.
+	r := gin.New()
+	r.Use(otelgin.Middleware("my-server"))
+	tmplName := "user"
+	tmplStr := "user {{ .name }} (id {{ .id }})\n"
+	tmpl := template.Must(template.New(tmplName).Parse(tmplStr))
+	r.SetHTMLTemplate(tmpl)
+	r.GET("/users/:id", func(c *gin.Context) {
+		id := c.Param("id")
+		name := getUser(c, id)
+		otelgin.HTML(c, http.StatusOK, tmplName, gin.H{
+			"name": name,
+			"id":   id,
+		})
+	})
+	_ = r.Run(":8080")
 }
 
 func initTracer() (*sdktrace.TracerProvider, error) {
@@ -60,11 +63,13 @@ func initTracer() (*sdktrace.TracerProvider, error) {
 	return tp, nil
 }
 
-func getUser(ctx context.Context, id string) string {
-	_, span := tracer.Start(ctx, "getUser", oteltrace.WithAttributes(attribute.String("id", id)))
+func getUser(c *gin.Context, id string) string {
+	// Pass the built-in `context.Context` object from http.Request to OpenTelemetry APIs
+	// where required. It is available from gin.Context.Request.Context()
+	_, span := tracer.Start(c.Request.Context(), "getUser", oteltrace.WithAttributes(attribute.String("id", id)))
 	defer span.End()
 	if id == "123" {
-		return "otelmux tester"
+		return "otelgin tester"
 	}
 	return "unknown"
 }

@@ -16,7 +16,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 
 	semconv1210 "go.opentelemetry.io/otel/semconv/v1.21.0"
-	semconv1260 "go.opentelemetry.io/otel/semconv/v1.26.0"
+	semconv "go.opentelemetry.io/otel/semconv/v1.32.0"
 )
 
 // Constants for environment variable keys and versions.
@@ -65,20 +65,38 @@ func WithCommandAttributeDisabled(disabled bool) AttributeOption {
 	}
 }
 
+// hasOptIn returns true if the comma-separated version string contains the
+// exact optIn value.
+func hasOptIn(version, optIn string) bool {
+	for _, v := range strings.Split(version, ",") {
+		if strings.TrimSpace(v) == optIn {
+			return true
+		}
+	}
+	return false
+}
+
 // CommandStartedTraceAttrs generates trace attributes for a CommandStartedEvent
 // based on the EventMonitor version.
 func (m EventMonitor) CommandStartedTraceAttrs(
 	evt *event.CommandStartedEvent,
 	opts ...AttributeOption,
 ) []attribute.KeyValue {
-	switch m.version {
-	case semconvOptIn1260:
-		return commandStartedTraceAttrsV1260(evt, opts...)
-	case semconvOptInDup:
-		return append(commandStartedTraceAttrsV1260(evt, opts...), commandStartedTraceAttrsV1210(evt, opts...)...)
-	default:
-		return commandStartedTraceAttrsV1210(evt, opts...)
+	// Dup implies both v1.26.0 and v1.21.0
+	if hasOptIn(m.version, semconvOptInDup) {
+		return append(
+			commandStartedTraceAttrs(evt, opts...),
+			commandStartedTraceAttrsV1210(evt, opts...)...,
+		)
 	}
+
+	// Check for the 1.26.0 opt-in
+	if hasOptIn(m.version, semconvOptIn1260) {
+		return commandStartedTraceAttrs(evt, opts...)
+	}
+
+	// Fallback to v1.21.0
+	return commandStartedTraceAttrsV1210(evt, opts...)
 }
 
 // peerInfo extracts the hostname and port from a CommandStartedEvent.
@@ -109,30 +127,30 @@ func sanitizeCommand(command bson.Raw) string {
 	return string(b)
 }
 
-// commandStartedTraceAttrsV1260 generates trace attributes for semantic version
-// 1.26.0.
-func commandStartedTraceAttrsV1260(evt *event.CommandStartedEvent, setters ...AttributeOption) []attribute.KeyValue {
+// commandStartedTraceAttrs generates trace attributes for the latest semantic
+// version.
+func commandStartedTraceAttrs(evt *event.CommandStartedEvent, setters ...AttributeOption) []attribute.KeyValue {
 	opts := &AttributeOptions{}
 	for _, set := range setters {
 		set(opts)
 	}
 
-	attrs := []attribute.KeyValue{semconv1260.DBSystemMongoDB}
+	attrs := []attribute.KeyValue{semconv.DBSystemNameMongoDB}
 
-	attrs = append(attrs, semconv1260.DBOperationName(evt.CommandName))
-	attrs = append(attrs, semconv1260.DBNamespace(evt.DatabaseName))
-	attrs = append(attrs, semconv1260.NetworkTransportTCP)
+	attrs = append(attrs, semconv.DBOperationName(evt.CommandName))
+	attrs = append(attrs, semconv.DBNamespace(evt.DatabaseName))
+	attrs = append(attrs, semconv.NetworkTransportTCP)
 
 	hostname, port := peerInfo(evt)
-	attrs = append(attrs, semconv1260.NetworkPeerPort(port))
-	attrs = append(attrs, semconv1260.NetworkPeerAddress(net.JoinHostPort(hostname, strconv.Itoa(port))))
+	attrs = append(attrs, semconv.NetworkPeerPort(port))
+	attrs = append(attrs, semconv.NetworkPeerAddress(net.JoinHostPort(hostname, strconv.Itoa(port))))
 
 	if !opts.commandAttributeDisabled {
-		attrs = append(attrs, semconv1260.DBQueryText(sanitizeCommand(evt.Command)))
+		attrs = append(attrs, semconv.DBQueryText(sanitizeCommand(evt.Command)))
 	}
 
 	if opts.collectionName != "" {
-		attrs = append(attrs, semconv1260.DBCollectionName(opts.collectionName))
+		attrs = append(attrs, semconv.DBCollectionName(opts.collectionName))
 	}
 
 	return attrs
